@@ -1,7 +1,9 @@
 import 'package:english_words/english_words.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 
 void main() {
@@ -30,21 +32,51 @@ class MyApp extends StatelessWidget {
 class MyAppState extends ChangeNotifier {
   var current = WordPair.random();
   var favorites = <WordPair>[];
-  
+  WordPair? lastRemoved; // Pour le bouton retour
+
   // Pour stocker le dernier message de notification
   String? lastNotification;
-  
-  // URL de base du backend Django
-  static const String baseUrl = 'http://localhost:8000/api';
 
   MyAppState() {
-    // Backend désactivé pour l'APK mobile
-    // loadFavoritesFromBackend();
+    // Charger les favoris locaux au démarrage
+    _loadLocalFavorites();
+  }
+
+  // Charger les favoris depuis le stockage local
+  Future<void> _loadLocalFavorites() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedFavorites = prefs.getStringList('favorites') ?? [];
+    favorites = savedFavorites.map((word) {
+      // Séparer le mot en deux parties
+      int splitPoint = word.length ~/ 2;
+      return WordPair(
+          word.substring(0, splitPoint), word.substring(splitPoint));
+    }).toList();
+    notifyListeners();
+  }
+
+  // Sauvegarder les favoris localement
+  Future<void> _saveLocalFavorites() async {
+    final prefs = await SharedPreferences.getInstance();
+    final favoriteStrings = favorites.map((pair) => pair.asLowerCase).toList();
+    prefs.setStringList('favorites', favoriteStrings);
   }
 
   void getNext() {
+    lastRemoved = null; // Réinitialiser quand on avance
     current = WordPair.random();
     notifyListeners();
+  }
+
+  // Bouton retour - récupérer le dernier mot
+  bool goBack() {
+    if (lastRemoved != null) {
+      current = lastRemoved!;
+      lastRemoved = null;
+      notifyListeners();
+      return true;
+    }
+    return false;
   }
 
   // Retourne true si ajouté, false si retiré
@@ -52,85 +84,57 @@ class MyAppState extends ChangeNotifier {
     bool wasAdded;
     if (favorites.contains(current)) {
       favorites.remove(current);
-      // _removeFavoriteFromBackend(current.asLowerCase); // Backend désactivé
       lastNotification = '"${current.asLowerCase}" retiré des favoris';
       wasAdded = false;
     } else {
       favorites.add(current);
-      // _addFavoriteToBackend(current.asLowerCase); // Backend désactivé
       lastNotification = '"${current.asLowerCase}" ajouté aux favoris!';
       wasAdded = true;
     }
+    _saveLocalFavorites(); // Sauvegarder localement
     notifyListeners();
     return wasAdded;
   }
 
-  // Charger les favoris depuis le backend
-  Future<void> loadFavoritesFromBackend() async {
-    try {
-      final response = await http.get(Uri.parse('$baseUrl/favorites/'));
-      if (response.statusCode == 200) {
-        final List<dynamic> data = jsonDecode(response.body);
-        favorites.clear();
-        for (var item in data) {
-          final word = item['word'] as String;
-          // Trouve la séparation entre les deux mots (cherche où le 2e mot commence)
-          // Exemple: "catbase" -> "cat" + "base"
-          int splitPoint = 1;
-          for (int i = 1; i < word.length; i++) {
-            if (word[i] == word[i].toLowerCase() && 
-                (i + 1 < word.length && word[i + 1] == word[i + 1].toLowerCase())) {
-              splitPoint = i;
-            }
-          }
-          // Si on ne trouve pas de point de séparation logique, coupe au milieu
-          if (splitPoint == 1 && word.length > 3) {
-            splitPoint = word.length ~/ 2;
-          }
-          final first = word.substring(0, splitPoint);
-          final second = word.substring(splitPoint);
-          favorites.add(WordPair(first, second));
-        }
-        notifyListeners();
-      }
-    } catch (e) {
-      print('Erreur lors du chargement des favoris: $e');
-    }
+  // Supprimer un favori spécifique
+  void removeFavorite(WordPair pair) {
+    favorites.remove(pair);
+    _saveLocalFavorites();
+    notifyListeners();
   }
 
-  // Ajouter un favori au backend (désactivé)
-  // Future<void> _addFavoriteToBackend(String word) async {
-  //   try {
-  //     await http.post(
-  //       Uri.parse('$baseUrl/favorites/'),
-  //       headers: {'Content-Type': 'application/json'},
-  //       body: jsonEncode({'word': word}),
-  //     );
-  //   } catch (e) {
-  //     print('Erreur lors de l\'ajout du favori: $e');
-  //   }
-  // }
+  // Réajouter un favori (pour annuler suppression)
+  void addFavorite(WordPair pair) {
+    favorites.add(pair);
+    _saveLocalFavorites();
+    notifyListeners();
+  }
 
-  // Supprimer un favori du backend (désactivé)
-  // Future<void> _removeFavoriteFromBackend(String word) async {
-  //   try {
-  //     await http.delete(Uri.parse('$baseUrl/favorites/$word/'));
-  //   } catch (e) {
-  //     print('Erreur lors de la suppression du favori: $e');
-  //   }
-  // }
+  // Passer au suivant en sauvegardant le précédent
+  void skipCurrent() {
+    lastRemoved = current;
+    current = WordPair.random();
+    notifyListeners();
+  }
+
+  // Charger les favoris depuis le backend (désactivé)
+  // Future<void> loadFavoritesFromBackend() async { ... }
+  // Future<void> _addFavoriteToBackend(String word) async { ... }
+  // Future<void> _removeFavoriteFromBackend(String word) async { ... }
 }
-
 
 class MyHomePage extends StatefulWidget {
   @override
   State<MyHomePage> createState() => _MyHomePageState();
 }
+
 class _MyHomePageState extends State<MyHomePage> {
   var selectedIndex = 0;
 
   @override
   Widget build(BuildContext context) {
+    var appState = context.watch<MyAppState>();
+
     Widget page;
     switch (selectedIndex) {
       case 0:
@@ -143,41 +147,42 @@ class _MyHomePageState extends State<MyHomePage> {
         throw UnimplementedError('no widget for $selectedIndex');
     }
 
-    return LayoutBuilder(builder: (context, constraints) {
-      return Scaffold(
-        body: Row(
-          children: [
-            SafeArea(
-              child: NavigationRail(
-                extended: constraints.maxWidth >= 600,  // ← Here.
-                destinations: [
-                  NavigationRailDestination(
-                    icon: Icon(Icons.home),
-                    label: Text('Home'),
-                  ),
-                  NavigationRailDestination(
-                    icon: Icon(Icons.favorite),
-                    label: Text('Favorites'),
-                  ),
-                ],
-                selectedIndex: selectedIndex,
-                onDestinationSelected: (value) {
-                  setState(() {
-                    selectedIndex = value;
-                  });
-                },
-              ),
-            ),
-            Expanded(
-              child: Container(
-                color: Theme.of(context).colorScheme.primaryContainer,
-                child: page,
-              ),
-            ),
-          ],
+    return Scaffold(
+      body: SafeArea(
+        child: Container(
+          color: Theme.of(context).colorScheme.primaryContainer,
+          child: page,
         ),
-      );
-    });
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: selectedIndex,
+        onDestinationSelected: (value) {
+          setState(() {
+            selectedIndex = value;
+          });
+        },
+        destinations: [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Badge(
+              label: Text('${appState.favorites.length}'),
+              isLabelVisible: appState.favorites.isNotEmpty,
+              child: Icon(Icons.favorite_outline),
+            ),
+            selectedIcon: Badge(
+              label: Text('${appState.favorites.length}'),
+              isLabelVisible: appState.favorites.isNotEmpty,
+              child: Icon(Icons.favorite),
+            ),
+            label: 'Favoris',
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -198,17 +203,39 @@ class GeneratorPage extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
+          // Bouton retour si disponible
+          if (appState.lastRemoved != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: TextButton.icon(
+                onPressed: () {
+                  appState.goBack();
+                },
+                icon: Icon(Icons.undo),
+                label: Text('Revenir au précédent'),
+              ),
+            ),
           SwipeableCard(pair: pair),
           SizedBox(height: 20),
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ElevatedButton.icon(
+              // Bouton Dislike
+              IconButton.filled(
                 onPressed: () {
-                  // Toggle et récupère si c'était un ajout ou retrait
+                  appState.skipCurrent();
+                },
+                icon: Icon(Icons.close),
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.red.shade100,
+                  foregroundColor: Colors.red,
+                ),
+              ),
+              SizedBox(width: 15),
+              // Bouton Like
+              IconButton.filled(
+                onPressed: () {
                   bool wasAdded = appState.toggleFavorite();
-                  
-                  // Affiche la notification SnackBar
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(appState.lastNotification ?? ''),
@@ -217,18 +244,42 @@ class GeneratorPage extends StatelessWidget {
                       behavior: SnackBarBehavior.floating,
                     ),
                   );
+                  if (wasAdded) {
+                    appState.skipCurrent();
+                  }
                 },
                 icon: Icon(icon),
-                label: Text('Like'),
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.green.shade100,
+                  foregroundColor: Colors.green,
+                ),
               ),
-              SizedBox(width: 10),
-              ElevatedButton(
+              SizedBox(width: 15),
+              // Bouton Next
+              IconButton.filled(
                 onPressed: () {
-                  appState.getNext();
+                  appState.skipCurrent();
                 },
-                child: Text('Next'),
+                icon: Icon(Icons.arrow_forward),
+                style: IconButton.styleFrom(
+                  backgroundColor:
+                      Theme.of(context).colorScheme.primaryContainer,
+                  foregroundColor: Theme.of(context).colorScheme.primary,
+                ),
               ),
             ],
+          ),
+          SizedBox(height: 10),
+          // Info tap pour définition
+          Text(
+            'Tap sur la carte pour voir la définition',
+            style: TextStyle(
+              color: Theme.of(context)
+                  .colorScheme
+                  .onPrimaryContainer
+                  .withValues(alpha: 0.6),
+              fontSize: 12,
+            ),
           ),
         ],
       ),
@@ -246,12 +297,11 @@ class BigCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    
     final theme = Theme.of(context);
-        final style = theme.textTheme.displayMedium!.copyWith(
+    final style = theme.textTheme.displayMedium!.copyWith(
       color: theme.colorScheme.onPrimary,
     );
-      
+
     return Card(
       color: theme.colorScheme.primary,
       child: Padding(
@@ -279,7 +329,8 @@ class SwipeableCard extends StatefulWidget {
   State<SwipeableCard> createState() => _SwipeableCardState();
 }
 
-class _SwipeableCardState extends State<SwipeableCard> with SingleTickerProviderStateMixin {
+class _SwipeableCardState extends State<SwipeableCard>
+    with SingleTickerProviderStateMixin {
   double _dragOffset = 0.0;
   bool _isDragging = false;
   late AnimationController _animationController;
@@ -292,7 +343,8 @@ class _SwipeableCardState extends State<SwipeableCard> with SingleTickerProvider
       vsync: this,
       duration: Duration(milliseconds: 300),
     );
-    _animation = Tween<double>(begin: 0.0, end: 0.0).animate(_animationController);
+    _animation =
+        Tween<double>(begin: 0.0, end: 0.0).animate(_animationController);
   }
 
   @override
@@ -317,10 +369,10 @@ class _SwipeableCardState extends State<SwipeableCard> with SingleTickerProvider
 
   void _onHorizontalDragEnd(DragEndDetails details) {
     var appState = context.read<MyAppState>();
-    
+
     // Seuil de swipe (en pixels) - réduit pour plus de sensibilité
     const double threshold = 80.0;
-    
+
     if (_dragOffset > threshold) {
       // Swipe vers la droite = LIKE
       _animateCardOut(true, appState);
@@ -331,7 +383,7 @@ class _SwipeableCardState extends State<SwipeableCard> with SingleTickerProvider
       // Retour à la position initiale
       _animateCardBack();
     }
-    
+
     setState(() {
       _isDragging = false;
     });
@@ -339,14 +391,15 @@ class _SwipeableCardState extends State<SwipeableCard> with SingleTickerProvider
 
   void _animateCardOut(bool isLike, MyAppState appState) {
     final targetOffset = isLike ? 400.0 : -400.0;
-    
+
     _animation = Tween<double>(
       begin: _dragOffset,
       end: targetOffset,
     ).animate(CurvedAnimation(
       parent: _animationController,
       curve: Curves.easeOut,
-    ))..addListener(() {
+    ))
+      ..addListener(() {
         setState(() {
           _dragOffset = _animation.value;
         });
@@ -367,10 +420,10 @@ class _SwipeableCardState extends State<SwipeableCard> with SingleTickerProvider
           );
         }
       }
-      
+
       // Passer au mot suivant
       appState.getNext();
-      
+
       // Réinitialiser la position
       setState(() {
         _dragOffset = 0.0;
@@ -385,7 +438,8 @@ class _SwipeableCardState extends State<SwipeableCard> with SingleTickerProvider
     ).animate(CurvedAnimation(
       parent: _animationController,
       curve: Curves.elasticOut,
-    ))..addListener(() {
+    ))
+      ..addListener(() {
         setState(() {
           _dragOffset = _animation.value;
         });
@@ -407,30 +461,32 @@ class _SwipeableCardState extends State<SwipeableCard> with SingleTickerProvider
       // Essayer de récupérer les définitions des deux mots
       final word1 = widget.pair.first.toLowerCase();
       final word2 = widget.pair.second.toLowerCase();
-      
-      final response1 = await http.get(Uri.parse('https://api.dictionaryapi.dev/api/v2/entries/en/$word1'));
-      final response2 = await http.get(Uri.parse('https://api.dictionaryapi.dev/api/v2/entries/en/$word2'));
-      
+
+      final response1 = await http.get(
+          Uri.parse('https://api.dictionaryapi.dev/api/v2/entries/en/$word1'));
+      final response2 = await http.get(
+          Uri.parse('https://api.dictionaryapi.dev/api/v2/entries/en/$word2'));
+
       String definition = '';
-      
+
       if (response1.statusCode == 200) {
         final data = jsonDecode(response1.body)[0];
         final meaning = data['meanings'][0]['definitions'][0]['definition'];
         definition += '${word1.toUpperCase()}: $meaning\n\n';
       }
-      
+
       if (response2.statusCode == 200) {
         final data = jsonDecode(response2.body)[0];
         final meaning = data['meanings'][0]['definitions'][0]['definition'];
         definition += '${word2.toUpperCase()}: $meaning';
       }
-      
+
       if (definition.isEmpty) {
         definition = 'Définition non trouvée';
       }
-      
+
       Navigator.of(context).pop(); // Fermer le loading
-      
+
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -477,23 +533,23 @@ class _SwipeableCardState extends State<SwipeableCard> with SingleTickerProvider
       onHorizontalDragEnd: _onHorizontalDragEnd,
       onTap: () => _showDefinition(context),
       child: Transform.translate(
-            offset: Offset(_dragOffset, 0),
-            child: Transform.rotate(
-              angle: _dragOffset / 1000,
-              child: Card(
-                elevation: _isDragging ? 8.0 : 4.0,
-                color: theme.colorScheme.primary,
-                child: Padding(
-                  padding: const EdgeInsets.all(40),
-                  child: Text(
-                    widget.pair.asLowerCase,
-                    style: style,
-                    semanticsLabel: "${widget.pair.first} ${widget.pair.second}",
-                  ),
-                ),
+        offset: Offset(_dragOffset, 0),
+        child: Transform.rotate(
+          angle: _dragOffset / 1000,
+          child: Card(
+            elevation: _isDragging ? 8.0 : 4.0,
+            color: theme.colorScheme.primary,
+            child: Padding(
+              padding: const EdgeInsets.all(40),
+              child: Text(
+                widget.pair.asLowerCase,
+                style: style,
+                semanticsLabel: "${widget.pair.first} ${widget.pair.second}",
               ),
             ),
           ),
+        ),
+      ),
     );
   }
 }
@@ -505,24 +561,99 @@ class FavoritesPage extends StatelessWidget {
 
     if (appState.favorites.isEmpty) {
       return Center(
-        child: Text('No favorites yet.'),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.favorite_border,
+              size: 80,
+              color:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+            ),
+            SizedBox(height: 20),
+            Text(
+              'Pas encore de favoris',
+              style: TextStyle(
+                fontSize: 18,
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Swipez à droite pour ajouter des mots !',
+              style: TextStyle(
+                color: Theme.of(context)
+                    .colorScheme
+                    .onPrimaryContainer
+                    .withValues(alpha: 0.6),
+              ),
+            ),
+          ],
+        ),
       );
     }
 
-    return ListView(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(20),
-          child: Text('You have '
-              '${appState.favorites.length} favorites:'),
-        ),
-        for (var pair in appState.favorites)
-          ListTile(
-            leading: Icon(Icons.favorite),
-            title: Text(pair.asLowerCase),
+    return ListView.builder(
+      itemCount: appState.favorites.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Text(
+              '${appState.favorites.length} favori${appState.favorites.length > 1 ? 's' : ''}',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          );
+        }
+
+        final pair = appState.favorites[index - 1];
+
+        return Dismissible(
+          key: Key(pair.asLowerCase),
+          direction: DismissDirection.endToStart,
+          background: Container(
+            color: Colors.red,
+            alignment: Alignment.centerRight,
+            padding: EdgeInsets.only(right: 20),
+            child: Icon(
+              Icons.delete,
+              color: Colors.white,
+            ),
           ),
-      ],
+          onDismissed: (direction) {
+            appState.removeFavorite(pair);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('"${pair.asLowerCase}" supprimé'),
+                backgroundColor: Colors.red,
+                behavior: SnackBarBehavior.floating,
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+          child: ListTile(
+            leading: Icon(Icons.favorite, color: Colors.red),
+            title: Text(pair.asLowerCase),
+            trailing: IconButton(
+              icon: Icon(Icons.delete_outline),
+              onPressed: () {
+                appState.removeFavorite(pair);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('"${pair.asLowerCase}" supprimé'),
+                    backgroundColor: Colors.red,
+                    behavior: SnackBarBehavior.floating,
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
     );
   }
 }
-
