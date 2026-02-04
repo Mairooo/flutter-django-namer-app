@@ -1,0 +1,30 @@
+# Flutter
+flutter_application_1/build/
+flutter_application_1/.dart_tool/
+flutter_application_1/.flutter-plugins
+flutter_application_1/.flutter-plugins-dependencies
+flutter_application_1/.packages
+flutter_application_1/.pub-cache/
+flutter_application_1/.pub/
+flutter_application_1/pubspec.lock
+
+# Django
+namer_backend/__pycache__/
+namer_backend/*/__pycache__/
+namer_backend/*/*/__pycache__/
+namer_backend/db.sqlite3
+namer_backend/*.pyc
+namer_backend/.env
+namer_backend/venv/
+namer_backend/env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
